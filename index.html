@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@meitogi/signal — test page</title>
+<style>
+  body { font: 18px/1.4 monospace; margin: 16px; color: #222; background: #fff; }
+  #via { font-size: 32px; font-weight: bold; margin-bottom: 12px; }
+  pre { white-space: pre-wrap; word-break: break-all; }
+  a { color: inherit; }
+</style>
+<div id="via">connecting…</div>
+<pre id="log"></pre>
+<script type="module">
+  // A static peer for @meitogi/signal : open this page with a room link (`#r=<room>&s=<secret>&relay=wss://…`,
+  // the output of formatLink) and it joins that room with the library's default STUN server, prints which
+  // path it got (`via direct` or `via relay`), reports it to the other peer as a JSON message, then echoes
+  // every message back with an `echo:` prefix (bytes come back reversed). Hosted on GitHub Pages so a phone
+  // on its own network can be the second peer of a test — the first one being wherever you run the
+  // library's node side. The client comes straight from the package's repository, nothing is bundled here.
+  import { joinRoom, parseLink } from 'https://cdn.jsdelivr.net/gh/meitogi/signal@master/src/index.js';
+
+  const state = (window.state = { ready: false, via: null, received: [], errors: [] });
+  const out = document.getElementById('log');
+  const via = document.getElementById('via');
+  const log = (line) => { out.textContent += `${line}\n`; };
+  const link = parseLink(location.href);
+  if (!link) {
+    via.textContent = 'no room in the link';
+    log('Open this page with a room link : #r=<room>&s=<secret>&relay=wss://<relay>');
+    log('See https://github.com/meitogi/signal-test-page');
+  } else {
+    const room = joinRoom({ ...link, connectMs: 15_000 });
+    room.on('peer', async (peer) => {
+      state.via = peer.via;
+      via.textContent = `via ${peer.via}`;
+      log(`peer ${peer.id.slice(0, 8)} via ${peer.via}`);
+      peer.on('message', async (data) => {
+        const text = typeof data === 'string' ? data : `bytes:${Array.from(data).join(',')}`;
+        state.received.push(text);
+        log(`<- ${text}`);
+        await peer.send(typeof data === 'string' ? `echo:${data}` : new Uint8Array([...data].reverse()));
+      });
+      await peer.send(JSON.stringify({ report: 'via', via: peer.via, ua: navigator.userAgent }));
+    });
+    room.on('leave', (peer, reason) => log(`leave ${peer.id.slice(0, 8)} ${reason}`));
+    room.on('error', (e) => { state.errors.push(e.code); log(`error ${e.code} ${e.message}`); });
+    room.on('close', (e) => log(`close ${e ? e.code : 'clean'}`));
+    room.ready.then(
+      () => { state.ready = true; log(`in the room as ${room.id.slice(0, 8)} — waiting for the other peer`); },
+      (e) => { via.textContent = 'could not join'; log(`ready rejected ${e.code} ${e.message}`); },
+    );
+  }
+</script>
+</html>
