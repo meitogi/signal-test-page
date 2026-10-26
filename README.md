@@ -18,9 +18,34 @@ message `{ "report": "via", "via": "direct" | "relay", "ua": "<user agent>" }`, 
 message it receives : a string comes back prefixed `echo:`, bytes come back reversed.
 `window.state` holds the same facts for a browser driven over CDP.
 
-The client is imported straight from the package's repository through jsDelivr
-(`meitogi/signal@master/src/index.js`) ; nothing is bundled or copied here. The page itself is
-one file, [index.html](index.html).
+## Bench mode
+
+With `&mode=bench` appended to the link, the page is the second peer of the library's bench
+(`deploy/test/bench.mjs` in [`meitogi/signal`](https://github.com/meitogi/signal), which prints
+that link). It joins two rooms : `<room>`, where a direct path is attempted, then
+`<room>-relay` with `connectMs: 1`. The newcomer's `connectMs` is the only one that counts, so
+that second room always falls back to the relay. The headline shows both paths. Each
+connection's candidates (sent and received) and chosen pair (`getStats()`) are logged when the
+bench asks for them, and the bench's summary is displayed when the run ends.
+
+In this mode a text message starting `{"bench"` is a command :
+
+- `{"bench":"report"}` is answered with
+  `{"bench":"report", via, lib, ua, local, remote, pair, received, echoed}` ;
+- `{"bench":"summary", lines}` is displayed.
+
+Any other message is echoed as in the default mode. `window.state.bench` holds the same facts
+per room.
+
+## Library version
+
+The client is imported straight from the package's repository through jsDelivr, **pinned to a
+commit** (`LIB` in [index.html](index.html)). jsDelivr caches a branch reference such as `@master`
+for up to 12 hours, whereas a commit URL never changes, so the page and a node side running a
+local checkout can be checked against each other : the bench compares the `src/` tree of the
+pinned commit with its own. After a library change is pushed, move `LIB` to the new commit and
+push this repository. Nothing is bundled or copied here ; the page itself is one file,
+[index.html](index.html).
 
 ## Why
 

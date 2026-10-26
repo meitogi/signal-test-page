@@ -6,10 +6,12 @@
 <style>
   body { font: 18px/1.4 monospace; margin: 16px; color: #222; background: #fff; }
   #via { font-size: 32px; font-weight: bold; margin-bottom: 12px; }
+  #summary { font-weight: bold; }
   pre { white-space: pre-wrap; word-break: break-all; }
   a { color: inherit; }
 </style>
 <div id="via">connecting…</div>
+<pre id="summary"></pre>
 <pre id="log"></pre>
 <script type="module">
   // A static peer for @meitogi/signal : open this page with a room link (`#r=<room>&s=<secret>&relay=wss://…`,
@@ -18,7 +20,34 @@
   // every message back with an `echo:` prefix (bytes come back reversed). Hosted on GitHub Pages so a phone
   // on its own network can be the second peer of a test — the first one being wherever you run the
   // library's node side. The client comes straight from the package's repository, nothing is bundled here.
-  import { joinRoom, parseLink } from 'https://cdn.jsdelivr.net/gh/meitogi/signal@master/src/index.js';
+  //
+  // With `&mode=bench` in the link it is the second peer of the library's bench (deploy/test/bench.mjs) :
+  // it joins room `<r>` (direct attempt), then `<r>-relay` with `connectMs: 1` (the relay forced), shows
+  // both paths with their candidates and chosen pair, answers the bench's commands and echoes the rest.
+
+  // The library, pinned to a commit : jsDelivr caches a branch for up to 12 hours, a commit for good.
+  const LIB = 'https://cdn.jsdelivr.net/gh/meitogi/signal@ad927eca9f22f5c4bef188d662ea0b9ef55c6ccf/src/index.js';
+
+  // Every RTCPeerConnection the client builds is recorded in `bucket` (the room being joined), with the
+  // candidates it sent and received. The client reads the global when its module is evaluated : the
+  // wrapper goes in first, then a dynamic import (a static one would be hoisted above it).
+  let bucket = [];
+  const Base = globalThis.RTCPeerConnection;
+  if (Base) {
+    globalThis.RTCPeerConnection = class extends Base {
+      constructor(config) {
+        super(config);
+        this._rec = { pc: this, local: [], remote: [] };
+        bucket.push(this._rec);
+        this.addEventListener('icecandidate', ({ candidate }) => { if (candidate?.candidate) this._rec.local.push(candidate.candidate); });
+      }
+      addIceCandidate(c) {
+        if (c?.candidate) this._rec.remote.push(c.candidate);
+        return super.addIceCandidate(c);
+      }
+    };
+  }
+  const { joinRoom, parseLink } = await import(LIB);
 
   const state = (window.state = { ready: false, via: null, received: [], errors: [] });
   const out = document.getElementById('log');
@@ -29,6 +58,8 @@
     via.textContent = 'no room in the link';
     log('Open this page with a room link : #r=<room>&s=<secret>&relay=wss://<relay>');
     log('See https://github.com/meitogi/signal-test-page');
+  } else if (new URLSearchParams(location.hash.slice(1)).get('mode') === 'bench') {
+    bench(link);
   } else {
     const room = joinRoom({ ...link, connectMs: 15_000 });
     room.on('peer', async (peer) => {
@@ -50,6 +81,99 @@
       () => { state.ready = true; log(`in the room as ${room.id.slice(0, 8)} — waiting for the other peer`); },
       (e) => { via.textContent = 'could not join'; log(`ready rejected ${e.code} ${e.message}`); },
     );
+  }
+
+  // ── bench mode ─────────────────────────────────────────────────────────────────────────────────
+
+  /** `candidate:f 1 udp prio addr port typ host …` → `host addr:port udp` */
+  function cand(line) {
+    const f = line.replace(/^a=/, '').split(' ');
+    const i = f.indexOf('typ');
+    return `${f[i + 1]} ${f[4]}:${f[5]} ${f[2].toLowerCase()}`;
+  }
+
+  /** The chosen pair from the connection's getStats(). */
+  function selectedPair(stats) {
+    const byId = {};
+    for (const s of stats) byId[s.id] = s;
+    let pair = null;
+    for (const s of stats) if (s.type === 'transport' && s.selectedCandidatePairId && byId[s.selectedCandidatePairId]) pair = byId[s.selectedCandidatePairId];
+    if (!pair) pair = stats.find((s) => s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') ?? stats.find((s) => s.type === 'candidate-pair' && s.nominated) ?? null;
+    if (!pair) return null;
+    const side = (c) => (c ? `${c.candidateType} ${c.address ?? c.ip}:${c.port}` : '?');
+    const local = byId[pair.localCandidateId];
+    return `${side(local)} ↔ ${side(byId[pair.remoteCandidateId])} ${local?.protocol ?? ''}`.trim();
+  }
+
+  async function facts(pcs) {
+    const rec = pcs.at(-1);
+    if (!rec) return { local: [], remote: [], pair: null };
+    let pair = null;
+    try { pair = selectedPair([...(await rec.pc.getStats()).values()]); } catch { /* closed */ }
+    const unique = (v, i, list) => list.indexOf(v) === i;
+    return { local: rec.local.map(cand).filter(unique), remote: rec.remote.map(cand).filter(unique), pair };
+  }
+
+  async function bench(link) {
+    state.lib = LIB;
+    state.bench = { direct: null, relay: null, summary: null };
+    const summary = document.getElementById('summary');
+    const render = () => {
+      const b = state.bench;
+      via.textContent = `direct room : ${b.direct?.via ? `via ${b.direct.via}` : '…'} · relay room : ${b.relay?.via ? `via ${b.relay.via}` : '…'}`;
+    };
+    let shown = 0;
+    const renderSoon = () => { if (Date.now() - shown > 500) { shown = Date.now(); render(); } };
+
+    const serve = (peer, r, pcs) => peer.on('message', async (data) => {
+      if (typeof data === 'string' && data.startsWith('{"bench"')) {
+        const msg = JSON.parse(data);
+        if (msg.bench === 'report') {
+          const f = await facts(pcs);
+          Object.assign(r, f);
+          log(`${r.room} : local ${f.local.join(' | ') || 'none'}`);
+          log(`${r.room} : remote ${f.remote.join(' | ') || 'none'}`);
+          log(`${r.room} : pair ${f.pair ?? 'none'}`);
+          await peer.send(JSON.stringify({ bench: 'report', via: peer.via, lib: LIB, ua: navigator.userAgent, received: r.received, echoed: r.echoed, ...f }));
+        } else if (msg.bench === 'summary') {
+          state.bench.summary = msg.lines;
+          summary.textContent = msg.lines.join('\n');
+        }
+        return;
+      }
+      if (typeof data === 'string') {
+        r.received.push(data);
+        log(`${r.room} <- ${data}`);
+        await peer.send(`echo:${data}`).catch(() => {});
+      } else {
+        if (data.length <= 64 && r.received.length < 20) r.received.push(`bytes:${Array.from(data).join(',')}`);
+        r.echoed++;
+        await peer.send(data.slice().reverse()).catch(() => {});
+      }
+      renderSoon();
+    });
+
+    const enter = async (key, name, options) => {
+      const pcs = (bucket = []);
+      const r = (state.bench[key] = { room: name, via: null, received: [], echoed: 0, errors: [] });
+      const room = joinRoom({ ...link, room: name, ...options });
+      room.on('error', (e) => { r.errors.push(e.code); state.errors.push(e.code); log(`${name} : error ${e.code} ${e.message}`); });
+      room.on('leave', (peer, reason) => log(`${name} : leave ${peer.id.slice(0, 8)} ${reason}`));
+      const first = new Promise((resolve) => room.on('peer', (peer) => {
+        r.via = peer.via;
+        log(`${name} : peer ${peer.id.slice(0, 8)} via ${peer.via}`);
+        render();
+        serve(peer, r, pcs);
+        resolve();
+      }));
+      await room.ready.then(() => log(`${name} : in the room as ${room.id.slice(0, 8)}`), (e) => log(`${name} : ready rejected ${e.code} ${e.message}`));
+      // The next room waits for this one's peer (direct, or the relay fallback), so `bucket` holds this room's connections only.
+      await Promise.race([first, new Promise((resolve) => setTimeout(resolve, 40_000))]);
+    };
+    render();
+    await enter('direct', link.room, { connectMs: 15_000 });
+    await enter('relay', `${link.room}-relay`, { connectMs: 1 }); // only the newcomer's connectMs decides : this page joins second
+    state.ready = true;
   }
 </script>
 </html>
