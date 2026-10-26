@@ -47,6 +47,12 @@ pinned commit with its own. After a library change is pushed, move `LIB` to the 
 push this repository. Nothing is bundled or copied here ; the page itself is one file,
 [index.html](index.html).
 
+The page shows which library it runs, under the headline and in the console. The line gives the
+pinned commit and whether it loaded from jsDelivr, then GitHub's compare API says where `master`
+stands : `src/ identical to master`, or the number of `src/` files changed since (in red :
+re-pin). `window.state.lib` and `window.state.libCheck` hold the same facts. When the library
+fails to load, the line says so in red instead of the page waiting forever on « connecting… ».
+
 ## Why
 
 A WebRTC peer that only ever met a browser on the same machine has never proven it can reach the

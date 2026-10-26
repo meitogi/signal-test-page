@@ -7,10 +7,13 @@
   body { font: 18px/1.4 monospace; margin: 16px; color: #222; background: #fff; }
   #via { font-size: 32px; font-weight: bold; margin-bottom: 12px; }
   #summary { font-weight: bold; }
+  #lib { font-size: 14px; color: #555; margin-bottom: 12px; }
+  #lib.bad { color: #b00; font-weight: bold; }
   pre { white-space: pre-wrap; word-break: break-all; }
   a { color: inherit; }
 </style>
 <div id="via">connecting…</div>
+<div id="lib">library : loading…</div>
 <pre id="summary"></pre>
 <pre id="log"></pre>
 <script type="module">
@@ -47,9 +50,40 @@
       }
     };
   }
-  const { joinRoom, parseLink } = await import(LIB);
+  // Which library this page runs, on screen and in the console : the pinned commit, whether it loaded,
+  // and whether `src/` on `master` is still the same (GitHub's compare API ; best effort).
+  const libLine = document.getElementById('lib');
+  const PIN = LIB.match(/@([0-9a-f]{40})\//)?.[1] ?? null;
+  const libText = PIN ? `meitogi/signal@${PIN.slice(0, 7)}` : LIB;
+  const from = PIN ? 'jsDelivr' : location.host;
+  const showLib = (text, bad = false) => { libLine.textContent = `library : ${text}`; libLine.className = bad ? 'bad' : ''; };
+  let lib;
+  try {
+    lib = await import(LIB);
+  } catch (e) {
+    showLib(`${libText} did not load (${e.message})`, true);
+    console.error(`[signal-test-page] library ${LIB} did not load`, e);
+    document.getElementById('via').textContent = 'library not loaded';
+    throw e;
+  }
+  showLib(`${libText} loaded from ${from}${PIN ? ' — checking master…' : ''}`);
+  console.info(`[signal-test-page] library loaded : ${LIB}`);
+  if (PIN) {
+    fetch(`https://api.github.com/repos/meitogi/signal/compare/${PIN}...master`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`GitHub ${r.status}`))))
+      .then((c) => {
+        const changed = (c.files ?? []).filter((f) => f.filename.startsWith('src/')).length;
+        const where = c.status === 'identical' ? 'the head of master' : `${c.ahead_by} commit(s) behind master`;
+        const text = `${libText} loaded from jsDelivr — ${where}, ${changed ? `${changed} src/ file(s) changed since : re-pin` : 'src/ identical to master'}`;
+        showLib(text, changed > 0 || c.status === 'diverged' || c.status === 'behind');
+        console.info(`[signal-test-page] ${text}`);
+        state.libCheck = { status: c.status, aheadBy: c.ahead_by, srcChanged: changed };
+      })
+      .catch((e) => showLib(`${libText} loaded from jsDelivr — master not checked (${e.message})`));
+  }
+  const { joinRoom, parseLink } = lib;
 
-  const state = (window.state = { ready: false, via: null, received: [], errors: [] });
+  const state = (window.state = { ready: false, via: null, received: [], errors: [], lib: LIB });
   const out = document.getElementById('log');
   const via = document.getElementById('via');
   const log = (line) => { out.textContent += `${line}\n`; };
@@ -115,7 +149,6 @@
   }
 
   async function bench(link) {
-    state.lib = LIB;
     state.bench = { direct: null, relay: null, summary: null };
     const summary = document.getElementById('summary');
     const render = () => {
