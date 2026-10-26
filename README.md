@@ -31,7 +31,9 @@ bench asks for them, and the bench's summary is displayed when the run ends.
 In this mode a text message starting `{"bench"` is a command :
 
 - `{"bench":"report"}` is answered with
-  `{"bench":"report", via, lib, ua, local, remote, pair, received, echoed}` ;
+  `{"bench":"report", via, lib, ua, client, local, remote, pair, received, echoed}` — `client`
+  carries `brave` (`navigator.brave`, Brave's user agent being Chrome's) and `navigator.connection`
+  when the browser has it (Chromium), so the bench can name the device and the network ;
 - `{"bench":"summary", lines}` is displayed.
 
 Any other message is echoed as in the default mode. `window.state.bench` holds the same facts

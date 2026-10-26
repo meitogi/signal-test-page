@@ -167,7 +167,11 @@
           log(`${r.room} : local ${f.local.join(' | ') || 'none'}`);
           log(`${r.room} : remote ${f.remote.join(' | ') || 'none'}`);
           log(`${r.room} : pair ${f.pair ?? 'none'}`);
-          await peer.send(JSON.stringify({ bench: 'report', via: peer.via, lib: LIB, ua: navigator.userAgent, received: r.received, echoed: r.echoed, ...f }));
+          // Brave says it is Brave only through navigator.brave ; navigator.connection exists in Chromium only.
+          const brave = (await navigator.brave?.isBrave?.().catch(() => false)) === true;
+          const c = navigator.connection;
+          const client = { brave, connection: c ? { type: c.type ?? null, effectiveType: c.effectiveType ?? null, downlink: c.downlink ?? null, rtt: c.rtt ?? null } : null };
+          await peer.send(JSON.stringify({ bench: 'report', via: peer.via, lib: LIB, ua: navigator.userAgent, client, received: r.received, echoed: r.echoed, ...f }));
         } else if (msg.bench === 'summary') {
           state.bench.summary = msg.lines;
           summary.textContent = msg.lines.join('\n');
